@@ -111,14 +111,28 @@ print(f"Filled {screen_filled_from_apps.sum()} missing screen values using app u
 
 ### fill NaN with 0 ##########################
 # For call, sms, screen, and all appCat.* NaN means no activity so we fill with 0
-ZERO_FILL_VARS = [c for c in daily_final.columns
+usage_vars = [c for c in daily_final.columns
                   if c in ('call', 'sms', 'screen') or c.startswith('appCat')]
 
-daily_final[ZERO_FILL_VARS] = daily_final[ZERO_FILL_VARS].fillna(0)
+daily_final[usage_vars] = daily_final[usage_vars].fillna(0)
+
+### impute state vars with per-user mean ##########################
+
+state_vars = [c for c in daily_final.columns
+              if c not in usage_vars and c not in ('id', 'date')]
+
+# Impute per user mean
+daily_final[state_vars] = (
+    daily_final
+    .groupby('id')[state_vars]
+    .transform(lambda x: x.fillna(x.mean()))
+)
+
 
 # Put id and date first for readability
 cols = ['id', 'date'] + [c for c in daily_final.columns if c not in ('id', 'date')]
 daily_final = daily_final[cols]
+
 
 
 ### save ###############
@@ -126,5 +140,5 @@ output_path = "data_cleaned.csv"
 daily_final.to_csv(output_path, index=False)
 
 print(f"\nFinal dataset: {daily_final.shape[0]} rows × {daily_final.shape[1]} columns")
-print(f"Users: {daily_final['id'].nunique()}, Date range: {daily_final['date'].min().date()} → {daily_final['date'].max().date()}")
+print(f"Users: {daily_final['id'].nunique()}, Date range: {daily_final['date'].min().date()} to {daily_final['date'].max().date()}")
 print(f"Saved to: {output_path}")
