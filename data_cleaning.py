@@ -5,7 +5,7 @@ import numpy as np
 
 # Step 1: Load data
 
-def load_data(file_path, dtype_dict):
+def load_data(file_path, dtype_dict=None):
     df = pd.read_csv(file_path, dtype = dtype_dict, low_memory=False)
     return df
 
@@ -22,62 +22,50 @@ def to_datetime(df):
 def remove_negatives(df):
     is_duration = df['variable'].str.startswith('appCat') | (df['variable'] == 'screen')
     df = df[~(is_duration & (df['value'] < 0))]
+    return df 
 
-def remove_outliers(df, low = 0.01, high = 0.99):
-    # find extreme / impossible values for each category
-    results = [] 
+def remove_outliers(df, low=0.01, high=0.99):
+
+    results = []
     variables = df['variable'].unique()
 
     for var in variables:
-        subset = df[df["variable"] == var]["value"]
+        subset = df[df["variable"] == var].copy()
 
-        # Variables with known ranges
+        # Known ranges
         if var == "mood":
-            subset = subset[subset["value"]].between(1, 10)
+            subset = subset[subset["value"].between(1, 10)]
 
         elif var == "circumplex.arousal":
-            subset = subset[subset["value"]].between(-2, 2)
-        
+            subset = subset[subset["value"].between(-2, 2)]
+
         elif var == "circumplex.valence":
-            subset = subset[subset["value"]].between(-2, 2)
+            subset = subset[subset["value"].between(-2, 2)]
 
         elif var == "activity":
-            subset = subset[subset["value"]].between(0, 1)
+            subset = subset[subset["value"].between(0, 1)]
 
-        else: 
-            # Variables we don't know ranges for 
-            lower = subset.quantile(low)
-            higher = subset.quantile(high)
-            subset = subset[subset["value"].between(lower, higher)]
-        
+        else:
+            lower = subset["value"].quantile(low)
+            upper = subset["value"].quantile(high)
+            subset = subset[subset["value"].between(lower, upper)]
+
         results.append(subset)
 
-    df = pd.concat(results)
-    return df 
+    df = pd.concat(results, ignore_index=True)
+    return df
 
-# Step 3: Reindex to gain the time series 
-
-def reindex_user(user_df):
-    user_df = user_df.sort_values('date').set_index('date')
-
-    # Create full daily date range for this user
-    full_range = pd.date_range(user_df.index.min(), user_df.index.max(), freq='D')
-
-    # Reindex to insert missing days
-    user_df = user_df.reindex(full_range)
-    user_df.index.name = 'date'
-
-    return user_df
-
-def save_cleaned(df):
-    df.to_csv("df_clean.csv", index = False)
-
-# Step 4: Missing values imputation 
+# Step 3: Missing values imputation 
     
+# ...
+# ... 
 
-# Step 5: Feature engineering
+
+# Step 4: Feature engineering
     
 def aggregate_values_daily(df):
+    df['time'] = pd.to_datetime(df['time'], format='mixed').dt.normalize()
+    
     SUM_VARS = (
         set(df.loc[df['variable'].str.startswith('appCat'), 'variable'].unique())
         | {'screen', 'call', 'sms'}
@@ -86,44 +74,78 @@ def aggregate_values_daily(df):
     mask_sum  = df['variable'].isin(SUM_VARS)
 
     daily_sum  = (df[mask_sum]
-                .groupby(['id', 'date', 'variable'])['value']
+                .groupby(['id', 'time', 'variable'])['value']
                 .sum()
                 .reset_index())
 
     daily_mean = (df[~mask_sum]
-                .groupby(['id', 'date', 'variable'])['value']
+                .groupby(['id', 'time', 'variable'])['value']
                 .mean()
                 .reset_index())
 
     daily = pd.concat([daily_sum, daily_mean], ignore_index=True)
 
     daily_pivot = daily.pivot_table(
-        index=['id', 'date'],
+        index=['id', 'time'],
         columns='variable',
         values='value'
     ).reset_index()
 
     daily_pivot.columns.name = None
-    daily_pivot['date'] = pd.to_datetime(daily_pivot['date'])
 
     return daily_pivot
 
-def main():
+# subpart: Reindex to gain the time series 
 
+def reindex_user(df):
+    df = df.sort_values('time').set_index('time')
+
+    # Create full daily date range for this user
+    full_range = pd.date_range(df.index.min(), df.index.max(), freq='D')
+
+    # Reindex to insert missing days
+    df = df.reindex(full_range)
+    df.index.name = 'time'
+
+    return df
+
+def reindex_all_users(df):
+    parts = []
+    for uid, udf in df.groupby('id'):
+        udf = udf.drop(columns='id')
+        result = reindex_user(udf)
+        result['id'] = uid
+        parts.append(result.reset_index())
+    return pd.concat(parts, ignore_index=True)
+
+def save_cleaned(df):
+    df.to_csv("df_clean.csv", index = False)
+
+def main():
+    # Load data:
     dtype_dict = {
         "id" : "category",
         "variable" : "category",
-        "value" : "int"
     }
 
     df = load_data(file_path = "dataset_mood_smartphone.csv", dtype_dict=dtype_dict)
 
+    # Outliers:
     df = drop_index_column(df)
     df = to_datetime(df)
     df = remove_negatives(df)
     df = remove_outliers(df)
-    df = reindex_user(df)
+
+    # Missing values:
+    ## .... 
+    ## ....
+
     save_cleaned(df)
+
+    # Feature engineering 
+    df = load_data(file_path="df_clean.csv")
+    df = aggregate_values_daily(df)
+    df = reindex_all_users(df)
 
 
 
