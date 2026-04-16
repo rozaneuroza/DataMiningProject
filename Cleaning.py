@@ -97,13 +97,24 @@ for uid, udf in daily_wide.groupby('id'):
 daily_final = pd.concat(parts, ignore_index=True)
 
 
+### If screen is missing, approximate it using total app usage ##############
+app_cols = [c for c in daily_final.columns if c.startswith('appCat')]
+app_sum = daily_final[app_cols].sum(axis=1)
+
+screen_missing = daily_final['screen'].isna()
+screen_filled_from_apps = screen_missing & (app_sum > 0)
+
+# Fill missing screen with app sum
+daily_final.loc[screen_filled_from_apps, 'screen'] = app_sum[screen_filled_from_apps]
+print(f"Filled {screen_filled_from_apps.sum()} missing screen values using app usage")
+
+
 ### fill NaN with 0 ##########################
 # For call, sms, screen, and all appCat.* NaN means no activity so we fill with 0
 ZERO_FILL_VARS = [c for c in daily_final.columns
                   if c in ('call', 'sms', 'screen') or c.startswith('appCat')]
 
 daily_final[ZERO_FILL_VARS] = daily_final[ZERO_FILL_VARS].fillna(0)
-
 
 # Put id and date first for readability
 cols = ['id', 'date'] + [c for c in daily_final.columns if c not in ('id', 'date')]
