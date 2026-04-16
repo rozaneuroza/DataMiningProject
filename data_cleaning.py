@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 
-# Data Cleaning pipeline 
+# Task 1: EDA, Data Cleaning & Feature Engineering 
 
 # Step 1: Load data
 
@@ -72,7 +72,41 @@ def reindex_user(user_df):
 def save_cleaned(df):
     df.to_csv("df_clean.csv", index = False)
 
+# Step 4: Missing values imputation 
+    
 
+# Step 5: Feature engineering
+    
+def aggregate_values_daily(df):
+    SUM_VARS = (
+        set(df.loc[df['variable'].str.startswith('appCat'), 'variable'].unique())
+        | {'screen', 'call', 'sms'}
+    )
+
+    mask_sum  = df['variable'].isin(SUM_VARS)
+
+    daily_sum  = (df[mask_sum]
+                .groupby(['id', 'date', 'variable'])['value']
+                .sum()
+                .reset_index())
+
+    daily_mean = (df[~mask_sum]
+                .groupby(['id', 'date', 'variable'])['value']
+                .mean()
+                .reset_index())
+
+    daily = pd.concat([daily_sum, daily_mean], ignore_index=True)
+
+    daily_pivot = daily.pivot_table(
+        index=['id', 'date'],
+        columns='variable',
+        values='value'
+    ).reset_index()
+
+    daily_pivot.columns.name = None
+    daily_pivot['date'] = pd.to_datetime(daily_pivot['date'])
+
+    return daily_pivot
 
 def main():
 
