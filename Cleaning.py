@@ -122,11 +122,51 @@ state_vars = [c for c in daily_final.columns
               if c not in usage_vars and c not in ('id', 'date')]
 
 # Impute per user mean
+"""
 daily_final[state_vars] = (
     daily_final
     .groupby('id')[state_vars]
     .transform(lambda x: x.fillna(x.mean()))
 )
+"""
+
+### REMOVE PRE-STATE PERIOD PER USER
+
+def trim_before_first_state(user_df):
+    user_df = user_df.sort_values('date')
+    
+    # Find rows where at least one state variable is observed
+    has_state = user_df[state_vars].notna().any(axis=1)
+    
+    if not has_state.any():
+        # If user never reports state vars → drop entirely
+        return pd.DataFrame(columns=user_df.columns)
+    
+    # First date where any state variable is observed
+    first_valid_idx = has_state.idxmax()
+    
+    # Keep from that point onward
+    return user_df.loc[first_valid_idx:]
+
+
+# Apply per user
+daily_final = (
+    daily_final
+    .groupby('id', group_keys=False)
+    .apply(trim_before_first_state)
+    .reset_index(drop=True)
+)
+
+print("Removed pre-state periods for each user")
+
+
+
+### impute by knn imputer ##########################
+
+from sklearn.impute import KNNImputer
+
+imputer = KNNImputer(n_neighbors=5, weights='distance')
+daily_final[state_vars] = imputer.fit_transform(daily_final[state_vars])
 
 
 # Put id and date first for readability
@@ -134,11 +174,8 @@ cols = ['id', 'date'] + [c for c in daily_final.columns if c not in ('id', 'date
 daily_final = daily_final[cols]
 
 
-
 ### save ###############
 output_path = "data_cleaned.csv"
 daily_final.to_csv(output_path, index=False)
-
 print(f"\nFinal dataset: {daily_final.shape[0]} rows × {daily_final.shape[1]} columns")
 print(f"Users: {daily_final['id'].nunique()}, Date range: {daily_final['date'].min().date()} to {daily_final['date'].max().date()}")
-print(f"Saved to: {output_path}")
