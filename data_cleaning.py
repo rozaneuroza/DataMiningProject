@@ -62,42 +62,52 @@ def remove_outliers(df, low=0.01, high=0.99):
     df = pd.concat(results, ignore_index=True)
     return df
 
-
-
 def save_cleaned(df):
     df.to_csv("df_clean.csv", index = False)
 
+def save_dataset(df, file_path):
+    df.to_csv(file_path, index = False)
+    print(f"Saved cleaned dataset to {file_path}")
+
 # Step 4: Feature engineering
-
-# Aggregate daily values
     
-def aggregate_values_daily(df):
-    df['date'] = df['time'].dt.date   # IMPORTANT: separate date column
+# Before aggregation - daily variation - compute from daily data
+    
+def pivot_raw(df):
+    df = df.copy()
+    df['date'] = pd.to_datetime(df['time']).dt.date
 
-    mask_sum = df['variable'].isin(USAGE_VARS)
-
-    daily_sum = (df[mask_sum]
-                 .groupby(['id', 'date', 'variable'])['value']
-                 .sum()
-                 .reset_index())
-
-    daily_mean = (df[~mask_sum]
-                  .groupby(['id', 'date', 'variable'])['value']
-                  .mean()
-                  .reset_index())
-
-    daily = pd.concat([daily_sum, daily_mean], ignore_index=True)
-
-    daily_pivot = daily.pivot_table(
-        index=['id', 'date'],
+    raw_pivot = df.pivot_table(
+        index=['id', 'time', 'date'],
         columns='variable',
         values='value'
     ).reset_index()
+    
+    raw_pivot.columns.name = None
+    return raw_pivot
 
-    daily_pivot.columns.name = None
-    daily_pivot['date'] = pd.to_datetime(daily_pivot['date'])
 
-    return daily_pivot
+def daily_variation(raw_pivot): # need a pivot table with variables as columns, but with raw values 
+    df_variation = {}
+    numeric_columns = raw_pivot.select_dtypes(include="number").columns
+    
+    for var in numeric_columns:
+        daily_std = raw_pivot.groupby("date")[var].std()
+        df_variation[var] = daily_std
+    
+    return pd.DataFrame(df_variation)
+
+
+def aggregate_daily(raw_pivot):
+    df = raw_pivot.copy()
+    numeric_columns = df.select_dtypes(include="number").columns
+    
+    agg_dict = {var: ("sum" if var in USAGE_VARS else "mean") for var in numeric_columns}
+    
+    daily = df.groupby(['id', 'date']).agg(agg_dict).reset_index()
+    daily['date'] = pd.to_datetime(daily['date'])
+    
+    return daily
 
 def remove_impossible_daily(df):
     duration_cols = [c for c in df.columns if c.startswith('appCat') or c == 'screen']
@@ -158,6 +168,22 @@ def save_cleaned(df, name):
     df.to_csv(name, index = False)
     print(f"Saved cleaned data to {name}")
 
+# Feature engineering 
+
+# Sliding windows     
+def sliding_window_features(df, windows=[3, 7, 14, 30]):
+    df = df.sort_values(['id', 'date'])
+    numeric_cols = [c for c in df.select_dtypes(include='number').columns if c != 'id']
+    
+    new_cols = {}
+    for var in numeric_cols:
+        for w in windows:
+            mean_col = f"{var}_mean_{w}d"
+            new_cols[mean_col] = (df.groupby('id')[var]
+                                    .transform(lambda x: x.rolling(w, min_periods=1).mean()))
+            new_cols[f"{var}_diff_{w}d"] = df.groupby('id')[mean_col].diff() if mean_col in df.columns else new_cols[mean_col].groupby(df['id']).diff()
+    
+    return pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
 def main():
     # Load data:
@@ -173,12 +199,16 @@ def main():
     # Save cleaned dataset before aggregation
     save_cleaned(df, "data_cleaned_before_agg.csv")
 
+    # Daily standard deviation 
+    raw_pivot = pivot_raw(df)
+    variation_daily = daily_variation(raw_pivot)
+    # Result - NaNs here mean that either there were no entries, or only one, so the standard deviation doesn't exist
+    print(variation_daily.head(5))
+
     # Feature engineering
-    df = aggregate_values_daily(df)
+    df = aggregate_daily(raw_pivot)
     df = remove_impossible_daily(df)
     df = reindex_all_users(df)
-    print(df.head(10))
-
 
     # Missing values
     df = fill_usage_vars(df)
@@ -189,8 +219,20 @@ def main():
     cols = ['id', 'date'] + [c for c in df.columns if c not in ('id', 'date')]
     df = df[cols]
 
+    print(df.head(10))
+
     # Save final cleaned dataset
     save_cleaned(df, "data_cleaned.csv")
+
+    # Feature engineering 
+
+    df = sliding_window_features(df)  
+
+    cols = ['id', 'date'] + [c for c in df.columns if c not in ('id', 'date')]
+
+    print(df.head())
+
+    save_dataset(df, "data_with_features.csv")
 
 if __name__ == "__main__":
     main()
