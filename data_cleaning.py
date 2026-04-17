@@ -61,11 +61,14 @@ def remove_outliers(df, low=0.01, high=0.99):
 # ... 
 
 
+def save_cleaned(df):
+    df.to_csv("df_clean.csv", index = False)
+
 # Step 4: Feature engineering
     
 def aggregate_values_daily(df):
     df['time'] = pd.to_datetime(df['time'], format='mixed').dt.normalize()
-    
+
     SUM_VARS = (
         set(df.loc[df['variable'].str.startswith('appCat'), 'variable'].unique())
         | {'screen', 'call', 'sms'}
@@ -118,8 +121,6 @@ def reindex_all_users(df):
         parts.append(result.reset_index())
     return pd.concat(parts, ignore_index=True)
 
-def save_cleaned(df):
-    df.to_csv("df_clean.csv", index = False)
 
 def main():
     # Load data:
@@ -146,6 +147,8 @@ def main():
     df = load_data(file_path="df_clean.csv")
     df = aggregate_values_daily(df)
     df = reindex_all_users(df)
+    print(df.head(10))
+
 
 
 
