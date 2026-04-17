@@ -1,5 +1,11 @@
 import pandas as pd
 import numpy as np
+from sklearn.impute import KNNImputer
+
+USAGE_VARS = ['call', 'sms', 'screen', 'appCat.builtin', 'appCat.communication', 'appCat.entertainment', 'appCat.finance', 'appCat.game', 'appCat.office', 'appCat.other', 'appCat.social', 'appCat.travel', 'appCat.unknown', 'appCat.utilities', 'appCat.weather']
+STATE_VARS = ["mood", "circumplex.arousal", "circumplex.valence", "activity"]
+
+SECONDS_IN_DAY = 86400
 
 # Task 1: EDA, Data Cleaning & Feature Engineering 
 
@@ -16,6 +22,7 @@ def drop_index_column(df):
 def to_datetime(df):
     df['time'] = pd.to_datetime(df['time'])
     return df
+
 
 # Step 2: Remove negative values and outliers/impossible values 
 
@@ -55,80 +62,108 @@ def remove_outliers(df, low=0.01, high=0.99):
     df = pd.concat(results, ignore_index=True)
     return df
 
-# Step 3: Missing values imputation 
-    
-# ...
-# ... 
 
 
 # Step 4: Feature engineering
+
+# Aggregate daily values
     
 def aggregate_values_daily(df):
-    df['time'] = pd.to_datetime(df['time'], format='mixed').dt.normalize()
-    
-    SUM_VARS = (
-        set(df.loc[df['variable'].str.startswith('appCat'), 'variable'].unique())
-        | {'screen', 'call', 'sms'}
-    )
+    df['date'] = df['time'].dt.date   # IMPORTANT: separate date column
 
-    mask_sum  = df['variable'].isin(SUM_VARS)
+    mask_sum = df['variable'].isin(USAGE_VARS)
 
-    daily_sum  = (df[mask_sum]
-                .groupby(['id', 'time', 'variable'])['value']
-                .sum()
-                .reset_index())
+    daily_sum = (df[mask_sum]
+                 .groupby(['id', 'date', 'variable'])['value']
+                 .sum()
+                 .reset_index())
 
     daily_mean = (df[~mask_sum]
-                .groupby(['id', 'time', 'variable'])['value']
-                .mean()
-                .reset_index())
+                  .groupby(['id', 'date', 'variable'])['value']
+                  .mean()
+                  .reset_index())
 
     daily = pd.concat([daily_sum, daily_mean], ignore_index=True)
 
     daily_pivot = daily.pivot_table(
-        index=['id', 'time'],
+        index=['id', 'date'],
         columns='variable',
         values='value'
     ).reset_index()
 
     daily_pivot.columns.name = None
+    daily_pivot['date'] = pd.to_datetime(daily_pivot['date'])
 
     return daily_pivot
 
-# subpart: Reindex to gain the time series 
+def remove_impossible_daily(df):
+    duration_cols = [c for c in df.columns if c.startswith('appCat') or c == 'screen']
 
-def reindex_user(df):
-    df = df.sort_values('time').set_index('time')
-
-    # Create full daily date range for this user
-    full_range = pd.date_range(df.index.min(), df.index.max(), freq='D')
-
-    # Reindex to insert missing days
-    df = df.reindex(full_range)
-    df.index.name = 'time'
+    impossible_mask = df[duration_cols] > SECONDS_IN_DAY
+    df[duration_cols] = df[duration_cols].mask(impossible_mask)
 
     return df
 
+def reindex_user(user_df):
+    user_df = user_df.sort_values('date').set_index('date')
+
+    full_range = pd.date_range(user_df.index.min(), user_df.index.max(), freq='D')
+    user_df = user_df.reindex(full_range)
+    user_df.index.name = 'date'
+
+    return user_df
+
+
 def reindex_all_users(df):
     parts = []
+
     for uid, udf in df.groupby('id'):
         udf = udf.drop(columns='id')
         result = reindex_user(udf)
         result['id'] = uid
         parts.append(result.reset_index())
+
     return pd.concat(parts, ignore_index=True)
 
-def save_cleaned(df):
-    df.to_csv("df_clean.csv", index = False)
+
+##### Missing values
+
+def fill_usage_vars(df):
+    usage_cols = [c for c in df.columns if c in USAGE_VARS]
+    df[usage_cols] = df[usage_cols].fillna(0)
+    return df
+
+
+def trim_before_first_state(user_df):
+    user_df = user_df.sort_values('date').reset_index(drop=True)
+    has_state = user_df[STATE_VARS].notna().any(axis=1)
+    if not has_state.any():
+        return pd.DataFrame(columns=user_df.columns)
+    first_valid_pos = has_state.idxmax()
+    return user_df.loc[first_valid_pos:].reset_index(drop=True)  # ← fix here
+
+
+def trim_all_users(df):
+    return (
+        df.groupby('id', group_keys=False)
+        .apply(trim_before_first_state)
+        .reset_index(drop=True)
+    )
+
+def knn_impute(df):
+    imputer = KNNImputer(n_neighbors=5, weights='distance')
+    df[STATE_VARS] = imputer.fit_transform(df[STATE_VARS])
+    return df
+
+def save_cleaned(df, name):
+    df.to_csv(name, index = False)
+    print(f"Saved cleaned data to {name}")
+
 
 def main():
     # Load data:
-    dtype_dict = {
-        "id" : "category",
-        "variable" : "category",
-    }
 
-    df = load_data(file_path = "dataset_mood_smartphone.csv", dtype_dict=dtype_dict)
+    df = load_data(file_path = "dataset_mood_smartphone.csv")
 
     # Outliers:
     df = drop_index_column(df)
@@ -136,18 +171,25 @@ def main():
     df = remove_negatives(df)
     df = remove_outliers(df)
 
-    # Missing values:
-    ## .... 
-    ## ....
+    # Save cleaned dataset before aggregation
+    save_cleaned(df, "data_cleaned_before_agg.csv")
 
-    save_cleaned(df)
-
-    # Feature engineering 
-    df = load_data(file_path="df_clean.csv")
+    # Feature engineering
     df = aggregate_values_daily(df)
+    df = remove_impossible_daily(df)
     df = reindex_all_users(df)
 
+    # Missing values
+    df = fill_usage_vars(df)
+    df = trim_all_users(df)
+    df = knn_impute(df)
 
+    # Final column order
+    cols = ['id', 'date'] + [c for c in df.columns if c not in ('id', 'date')]
+    df = df[cols]
+
+    # Save final cleaned dataset
+    save_cleaned(df, "data_cleaned.csv")
 
 if __name__ == "__main__":
     main()
