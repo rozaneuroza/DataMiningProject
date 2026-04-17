@@ -179,3 +179,4 @@ output_path = "data_cleaned.csv"
 daily_final.to_csv(output_path, index=False)
 print(f"\nFinal dataset: {daily_final.shape[0]} rows × {daily_final.shape[1]} columns")
 print(f"Users: {daily_final['id'].nunique()}, Date range: {daily_final['date'].min().date()} to {daily_final['date'].max().date()}")
+
