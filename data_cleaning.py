@@ -75,7 +75,7 @@ def save_dataset(df, file_path):
     
 def pivot_raw(df):
     df = df.copy()
-    df['date'] = pd.to_datetime(df['time']).dt.date
+    df['date'] = pd.to_datetime(df['time']).dt.normalize()
 
     raw_pivot = df.pivot_table(
         index=['id', 'time', 'date'],
@@ -87,15 +87,18 @@ def pivot_raw(df):
     return raw_pivot
 
 
-def daily_variation(raw_pivot): # need a pivot table with variables as columns, but with raw values 
-    df_variation = {}
+def daily_variation(raw_pivot):
     numeric_columns = raw_pivot.select_dtypes(include="number").columns
     
+    new_cols = {}
     for var in numeric_columns:
-        daily_std = raw_pivot.groupby("date")[var].std()
-        df_variation[var] = daily_std
+        new_cols[var] = raw_pivot.groupby(['id', 'date'])[var].transform('std')
     
-    return pd.DataFrame(df_variation)
+    variation = pd.DataFrame(new_cols, index=raw_pivot.index)
+    variation['id'] = raw_pivot['id']
+    variation['date'] = raw_pivot['date']
+    
+    return variation.groupby(['id', 'date']).first().reset_index()  # ← id and date become plain columns
 
 
 def aggregate_daily(raw_pivot):
@@ -201,9 +204,10 @@ def main():
 
     # Daily standard deviation 
     raw_pivot = pivot_raw(df)
-    variation_daily = daily_variation(raw_pivot)
+    std_daily = daily_variation(raw_pivot)
     # Result - NaNs here mean that either there were no entries, or only one, so the standard deviation doesn't exist
-    print(variation_daily.head(5))
+    print(std_daily.head(5))
+    save_dataset(std_daily, "daily_standard_variation.csv")
 
     # Feature engineering
     df = aggregate_daily(raw_pivot)
