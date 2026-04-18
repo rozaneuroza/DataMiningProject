@@ -171,9 +171,15 @@ def trim_all_users(df):
         .reset_index(drop=True)
     )
 
+def interpolate(df):
+    df[STATE_VARS] = df[STATE_VARS].groupby(df["id"]).apply(lambda x: x.interpolate())
+
 def knn_impute(df):
     imputer = KNNImputer(n_neighbors=5, weights='distance')
     df[STATE_VARS] = imputer.fit_transform(df[STATE_VARS])
+    df["mood"] = np.rint(df["mood"]) # mood is integer
+    df["circumplex.arousal"]= np.rint(df["circumplex.arousal"]) # arousal is integer
+    df["circumplex.valence"]= np.rint(df["circumplex.valence"]) # valence is integer
     return df
 
 def save_cleaned(df, name):
