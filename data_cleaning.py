@@ -7,6 +7,9 @@ from sklearn.model_selection import train_test_split
 from sklearn.tree import plot_tree
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
+import torch
+from torch.utils.data import Dataset, DataLoader
+import torch.nn as nn 
 
 USAGE_VARS = ['call', 'sms', 'screen', 'appCat.builtin', 'appCat.communication', 'appCat.entertainment', 'appCat.finance', 'appCat.game', 'appCat.office', 'appCat.other', 'appCat.social', 'appCat.travel', 'appCat.unknown', 'appCat.utilities', 'appCat.weather']
 STATE_VARS = ["mood", "circumplex.arousal", "circumplex.valence", "activity"]
@@ -226,6 +229,27 @@ def create_sequences(df, window_size=7):
 
     return np.array(X, dtype = np.float32), np.array(y)
 
+# Dataset class for PyTorch 
+
+class MoodDataset(Dataset):
+    def __init__(self, X, y):
+        self.X = torch.tensor(X, dtype = torch.float32)
+        self.y = torch.tensor(y, dtype = torch.long)
+    def __len__(self): return len(self.X)
+    def __getitem__(self, i):
+        return self.X[i], self.y[i]
+    
+class MoodLSTM(nn.Module):
+    def __init__(self, n_features, n_classes=4, hidden_size=64):
+        super().__init__() # from parent class nn.Module
+        self.lstm = nn.lstm(n_features, hidden_size)
+        self.dropout = nn.Dropout(p=0.3)
+        self.fc = nn.Linear(hidden_size, n_classes)
+
+    def forward(self, x):
+        _, (h, _) = self.lstm(x)
+        return self.fc(self.dropout(h[-1]))
+    
 
 def main():
     ### DATA CLEANING: TASK 1 ###
@@ -358,6 +382,30 @@ def main():
     class_to_idx = {c: i for i, c in enumerate(classes)}
     y_train = np.array([class_to_idx[c] for c in y_train])
     y_test  = np.array([class_to_idx[c] for c in y_test])
+
+    train_dataset = MoodDataset(X_train, y_train)
+    test_dataset = MoodDataset(X_test, y_test)
+    train_loader = DataLoader(train_dataset, test_dataset, shuffle = False, batch_size=32)
+
+    model = MoodLSTM(n_features = n_features, n_classes=4, hidden_size = 64)
+
+    # Train - with Adam Optimizer 
+    optimizer = torch.optim.Adam(params = model.parameters(), lr = 1e-3)
+    criterion = nn.CrossEntropyLoss()
+
+    for epoch in range(20):
+        model.train() # this turns the dropout on, the next lines train 
+        for X_batch, y_batch in train_loader:
+            optimizer.zero_grad()
+            output = model(X_batch)
+            loss = criterion(output, y_batch)
+            loss.backward()
+            optimizer.step() # update weights 
+        print(f"Epoch {epoch+1}/20  loss: {loss.item():.4f}")
+
+    # Evaluation 
+    
+    model.eval()
 
 if __name__ == "__main__":
     main()
