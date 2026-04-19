@@ -6,7 +6,7 @@ from sklearn.metrics import accuracy_score, confusion_matrix, precision_score, r
 from sklearn.model_selection import train_test_split
 from sklearn.tree import plot_tree
 import matplotlib.pyplot as plt
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 import torch
 from torch.utils.data import Dataset, DataLoader
 import torch.nn as nn 
@@ -99,15 +99,18 @@ def pivot_raw(df):
 def daily_variation(raw_pivot):
     numeric_columns = raw_pivot.select_dtypes(include="number").columns
     
+    scaler = MinMaxScaler()
+    normalized = raw_pivot.copy()
+    normalized[numeric_columns] = scaler.fit_transform(raw_pivot[numeric_columns])
+    
     new_cols = {}
     for var in numeric_columns:
-        new_cols[var] = raw_pivot.groupby(['id', 'date'])[var].transform('std')
+        new_cols[f"{var}_std"] = normalized.groupby(['id', 'date'])[var].transform('std')
     
     variation = pd.DataFrame(new_cols, index=raw_pivot.index)
     variation['id'] = raw_pivot['id']
     variation['date'] = raw_pivot['date']
-    
-    return variation.groupby(['id', 'date']).first().reset_index()  # ← id and date become plain columns
+    return variation.groupby(['id', 'date']).first().reset_index()
 
 
 def aggregate_daily(raw_pivot):
@@ -221,7 +224,7 @@ def create_sequences(df, window_size=7):
     for uid, user_df in df.groupby('id'):
         user_df = user_df.sort_values("date")
         features = user_df[feature_columns].values
-        targets = user_df['mood_classs_target'].values
+        targets = user_df['mood_class_target'].values
 
         for i in range(len(user_df) - window_size):
             X.append(features[i:i+window_size])
@@ -242,7 +245,7 @@ class MoodDataset(Dataset):
 class MoodLSTM(nn.Module):
     def __init__(self, n_features, n_classes=4, hidden_size=64):
         super().__init__() # from parent class nn.Module
-        self.lstm = nn.lstm(n_features, hidden_size)
+        self.lstm = nn.LSTM(n_features, hidden_size, batch_first=True)
         self.dropout = nn.Dropout(p=0.3)
         self.fc = nn.Linear(hidden_size, n_classes)
 
@@ -271,7 +274,7 @@ def main():
     std_daily = daily_variation(raw_pivot)
     # Result - NaNs here mean that either there were no entries, or only one, so the standard deviation doesn't exist
     print(std_daily.head(5))
-    save_dataset(std_daily, "daily_standard_variation.csv")
+    #save_dataset(std_daily, "daily_standard_variation.csv")
 
     # Feature engineering
     df = aggregate_daily(raw_pivot)
@@ -305,12 +308,17 @@ def main():
     print(df['mood'].describe())
     print(df['mood'].head(20))
 
+    df = df.merge(std_daily, on=['id', 'date'], how='left')
+    std_cols = [c for c in df.columns if c.endswith('_std')]
+    df[std_cols] = df[std_cols].fillna(0)
+
     # Engineer classes for supervised learning: mood class
     # Mood is an average mood during the day 
     df['mood_class'] = pd.cut(df['mood'], bins=[-np.inf, 4,6,8, np.inf], labels=['low', 'medium', 'high', 'very_high'])
     # We use up to 4 for low because there are no values below 2 to have a class "very_low"
     print(df['mood_class'].value_counts())
     print(df['mood_class'].head(10))
+
 
     # Check missing values?
     print(df.isnull().sum()[df.isnull().sum() > 0])
@@ -326,7 +334,7 @@ def main():
 
     # 1. Instance based: Random Forest 
     # 1. Train test split
-    X = df.drop(columns=['id', 'date', 'mood_class'])
+    X = df.drop(columns=['id', 'date', 'mood', 'mood_class'])
     y = df['mood_class']
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
@@ -344,6 +352,25 @@ def main():
 
     accuracy = accuracy_score(y_test, y_pred)
     print("Accuracy:", accuracy)
+
+    conf_matrix = confusion_matrix(y_test, y_pred)
+    print("Confusion Matrix:")
+    print(conf_matrix)
+
+    # Feature importance 
+    importances = rf.feature_importances_
+    indices = np.argsort(importances)[::-1]
+    top_10_indices = indices[:10]
+    feature_names = np.array(df.drop(columns=['id', 'date', 'mood_class']).columns)
+
+    plt.figure(figsize=(12, 6))
+    plt.title("Top 10 Feature Importances")
+    plt.bar(range(10), importances[top_10_indices], color="r", align="center")
+    plt.xticks(range(10), [feature_names[i] for i in top_10_indices], rotation=90)
+    plt.xlim([-1, 10])
+    plt.tight_layout()
+    plt.savefig("feature_importance.png", bbox_inches='tight')
+    plt.show()
 
     # Visualize first 3 decision trees 
 
@@ -385,7 +412,8 @@ def main():
 
     train_dataset = MoodDataset(X_train, y_train)
     test_dataset = MoodDataset(X_test, y_test)
-    train_loader = DataLoader(train_dataset, test_dataset, shuffle = False, batch_size=32)
+    train_loader = DataLoader(train_dataset, shuffle = False, batch_size=32)
+    test_loader = DataLoader(test_dataset, shuffle=False, batch_size=32)
 
     model = MoodLSTM(n_features = n_features, n_classes=4, hidden_size = 64)
 
