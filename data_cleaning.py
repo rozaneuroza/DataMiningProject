@@ -284,7 +284,7 @@ def main():
     # Missing values
     df = fill_usage_vars(df)
     df = trim_all_users(df)
-    #df = knn_impute(df)
+    df = knn_impute(df)
 
     # Final column order
     cols = ['id', 'date'] + [c for c in df.columns if c not in ('id', 'date')]
