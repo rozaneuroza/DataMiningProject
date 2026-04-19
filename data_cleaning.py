@@ -177,9 +177,6 @@ def interpolate(df):
 def knn_impute(df):
     imputer = KNNImputer(n_neighbors=5, weights='distance')
     df[STATE_VARS] = imputer.fit_transform(df[STATE_VARS])
-    df["mood"] = np.rint(df["mood"]) # mood is integer
-    df["circumplex.arousal"]= np.rint(df["circumplex.arousal"]) # arousal is integer
-    df["circumplex.valence"]= np.rint(df["circumplex.valence"]) # valence is integer
     return df
 
 def save_cleaned(df, name):
@@ -287,7 +284,7 @@ def main():
     # Missing values
     df = fill_usage_vars(df)
     df = trim_all_users(df)
-    df = knn_impute(df)
+    #df = knn_impute(df)
 
     # Final column order
     cols = ['id', 'date'] + [c for c in df.columns if c not in ('id', 'date')]
