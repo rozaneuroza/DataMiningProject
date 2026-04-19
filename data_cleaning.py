@@ -11,6 +11,8 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import torch.nn as nn 
 import seaborn as sns
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.ensemble import RandomForestRegressor
 
 USAGE_VARS = ['call', 'sms', 'screen', 'appCat.builtin', 'appCat.communication', 'appCat.entertainment', 'appCat.finance', 'appCat.game', 'appCat.office', 'appCat.other', 'appCat.social', 'appCat.travel', 'appCat.unknown', 'appCat.utilities', 'appCat.weather']
 STATE_VARS = ["mood", "circumplex.arousal", "circumplex.valence", "activity"]
@@ -236,6 +238,26 @@ def create_sequences(df, window_size=7):
 
     return np.array(X, dtype = np.float32), np.array(y)
 
+def create_sequences_regression(df, window_size=7):
+    # Creates sequences of size window_size, with target = next day's numeric mood
+
+    X = []
+    y = []
+
+    feature_columns = [c for c in df.columns if c not in ('id', 'date', 'mood_target', "mood_class")]
+
+    for uid, user_df in df.groupby('id'):
+        user_df = user_df.sort_values("date")
+
+        features = user_df[feature_columns].values
+        targets = user_df['mood_target'].values
+
+        for i in range(len(user_df) - window_size):
+            X.append(features[i:i+window_size])
+            y.append(targets[i+window_size])
+
+    return np.array(X, dtype=np.float32), np.array(y, dtype=np.float32)
+
 # Dataset class for PyTorch 
 
 class MoodDataset(Dataset):
@@ -243,6 +265,17 @@ class MoodDataset(Dataset):
         self.X = torch.tensor(X, dtype = torch.float32)
         self.y = torch.tensor(y, dtype = torch.long)
     def __len__(self): return len(self.X)
+    def __getitem__(self, i):
+        return self.X[i], self.y[i]
+
+class MoodRegressionDataset(Dataset):
+    def __init__(self, X, y):
+        self.X = torch.tensor(X, dtype=torch.float32)
+        self.y = torch.tensor(y, dtype=torch.float32)
+
+    def __len__(self):
+        return len(self.X)
+
     def __getitem__(self, i):
         return self.X[i], self.y[i]
     
@@ -257,6 +290,17 @@ class MoodLSTM(nn.Module):
         _, (h, _) = self.lstm(x)
         return self.fc(self.dropout(h[-1]))
     
+class MoodLSTMRegressor(nn.Module):
+    def __init__(self, n_features, hidden_size=64):
+        super().__init__()
+        self.lstm = nn.LSTM(n_features, hidden_size, batch_first=True)
+        self.dropout = nn.Dropout(p=0.3)
+        self.fc = nn.Linear(hidden_size, 1)
+
+    def forward(self, x):
+        _, (h, _) = self.lstm(x)
+        return self.fc(self.dropout(h[-1]))
+
 
 def main():
     ### DATA CLEANING: TASK 1 ###
@@ -334,6 +378,10 @@ def main():
 
     save_dataset(df, "data_with_features.csv")
 
+
+
+
+
     ### CLASSIFICATION: TASK 2 ###
 
     # 1. Instance based: Random Forest 
@@ -407,16 +455,19 @@ def main():
         plt.savefig(f"tree_{decision}.png")
         plt.close()
 
+
+
+
     # 2. Temporal model: RNN 
     
     # We need to prepare the sequential data 
     # Because the target is the next day's mood, we shift the mood class column by -1 (for supervised learning)
-        
-    df['mood_class_target'] = df.groupby('id')['mood_class'].shift(-1)
+    df_rnn = df.copy()    
+    df_rnn['mood_class_target'] = df_rnn.groupby('id')['mood_class'].shift(-1)
     # We drop the last row for each user because it has no target
-    df = df.dropna(subset=['mood_class_target'])
+    df_rnn = df_rnn.dropna(subset=['mood_class_target'])
 
-    X, y = create_sequences(df, window_size=7)
+    X, y = create_sequences(df_rnn, window_size=7)
 
     # Train test split (sequentially)
     threshold = int(0.8 * len(X))
@@ -459,6 +510,179 @@ def main():
     # Evaluation 
     
     model.eval()
+
+
+    ### numerical prediction
+
+    # 1. Random forest
+
+    # Features and target
+    X = df.drop(columns=['id', 'date', 'mood_class', 'mood'])  # remove classification + target
+    y = df['mood']
+
+    # Train-test split
+    # For temporal data we split it not randomly but by time, to avoid data leakage. 
+    # We sort by id and date, then take the first 80% as training and the last 20% as testing.
+    df_sorted = df.sort_values(['id', 'date'])
+
+    split_idx = int(0.8 * len(df_sorted))
+
+    train_df = df_sorted.iloc[:split_idx]
+    test_df  = df_sorted.iloc[split_idx:]
+
+    X_train = train_df.drop(columns=['id', 'date', 'mood_class', 'mood'])
+    y_train = train_df['mood']
+
+    X_test = test_df.drop(columns=['id', 'date', 'mood_class', 'mood'])
+    y_test = test_df['mood']
+
+    # Model
+    rf_reg = RandomForestRegressor(
+        n_estimators=100,
+        max_depth=None,
+        random_state=42,
+        n_jobs=-1
+    )
+
+    rf_reg.fit(X_train, y_train)
+
+    # Predictions
+    y_pred = rf_reg.predict(X_test)
+
+    # Evaluation metrics
+    mae = mean_absolute_error(y_test, y_pred)
+    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+    r2 = r2_score(y_test, y_pred)
+
+    print("Random forest regression performance:")
+    print(f"MAE:  {mae:.4f}")
+    print(f"RMSE: {rmse:.4f}")
+    print(f"R²:   {r2:.4f}")
+
+    # Actual vs Predicted mood plot
+    plt.figure(figsize=(6,6))
+    plt.scatter(y_test, y_pred, alpha=0.5)
+    plt.xlabel("Actual Mood")
+    plt.ylabel("Predicted Mood")
+    plt.title("Random Forest: Actual vs Predicted Mood")
+
+    # Perfect prediction line
+    min_val = min(y_test.min(), y_pred.min())
+    max_val = max(y_test.max(), y_pred.max())
+    plt.plot([min_val, max_val], [min_val, max_val], 'r--')
+
+    plt.tight_layout()
+    plt.savefig("rf_regression_scatter.png")
+    plt.show()
+
+    # Importance plot
+    importances = rf_reg.feature_importances_
+    indices = np.argsort(importances)[::-1]
+    top_10 = indices[:10]
+
+    feature_names = X.columns
+
+    plt.figure(figsize=(12,6))
+    plt.title("Top 10 Feature Importances (Regression)")
+    plt.bar(range(10), importances[top_10])
+    plt.xticks(range(10), [feature_names[i] for i in top_10], rotation=90)
+    plt.tight_layout()
+    plt.savefig("rf_reg_feature_importance.png")
+    plt.show()
+
+
+
+
+    # 2.LSTM
+
+    # Target = next day's numeric mood
+    df_reg = df.copy()
+    df_reg['mood_target'] = df_reg.groupby('id')['mood'].shift(-1)
+
+    # Drop the last row for each user because it has no target
+    df_reg = df_reg.dropna(subset=['mood_target']).copy()
+
+    # Remove classification column
+    df_reg = df_reg.drop(columns=['mood_class'])
+
+    # Create sequences
+    X_r, y_r = create_sequences_regression(df_reg, window_size=7)
+
+    # Train test split (sequentially)
+    threshold = int(0.8 * len(X_r))
+    X_train_r, X_test_r = X_r[:threshold], X_r[threshold:]
+    y_train_r, y_test_r = y_r[:threshold], y_r[threshold:]
+
+    # Scale
+    scaler_r = StandardScaler()
+    n_samples_r, window_r, n_features_r = X_train_r.shape
+
+    X_train_r = scaler_r.fit_transform(X_train_r.reshape(-1, n_features_r)).reshape(-1, window_r, n_features_r)
+    X_test_r  = scaler_r.transform(X_test_r.reshape(-1, n_features_r)).reshape(-1, window_r, n_features_r)
+
+    # Dataset + Loader
+    train_dataset_r = MoodRegressionDataset(X_train_r, y_train_r)
+    test_dataset_r  = MoodRegressionDataset(X_test_r, y_test_r)
+
+    train_loader_r = DataLoader(train_dataset_r, shuffle=False, batch_size=32)
+    test_loader_r  = DataLoader(test_dataset_r, shuffle=False, batch_size=32)
+
+    # Model
+    model_r = MoodLSTMRegressor(n_features=n_features_r, hidden_size=64)
+
+    # Train - with Adam Optimizer
+    optimizer_r = torch.optim.Adam(params=model_r.parameters(), lr=1e-3)
+    criterion_r = nn.MSELoss()
+
+    for epoch in range(20):
+        model_r.train()
+        for X_batch_r, y_batch_r in train_loader_r:
+            optimizer_r.zero_grad()
+            output_r = model_r(X_batch_r)
+
+            loss_r = criterion_r(output_r.reshape(-1), y_batch_r.reshape(-1))
+            loss_r.backward()
+            optimizer_r.step()
+
+        print(f"Epoch {epoch+1}/20  loss: {loss_r.item():.4f}")
+
+    # Evaluation
+    model_r.eval()
+
+    preds_r = []
+    actuals_r = []
+
+    with torch.no_grad():
+        for X_batch_r, y_batch_r in test_loader_r:
+            output_r = model_r(X_batch_r)
+            preds_r.extend(output_r.reshape(-1).cpu().numpy())
+            actuals_r.extend(y_batch_r.reshape(-1).cpu().numpy())
+
+    preds_r = np.array(preds_r)
+    preds_r = np.clip(preds_r, 1, 10)
+    actuals_r = np.array(actuals_r)
+
+    mae_r = mean_absolute_error(actuals_r, preds_r)
+    rmse_r = np.sqrt(mean_squared_error(actuals_r, preds_r))
+    r2_r = r2_score(actuals_r, preds_r)
+
+    print("\nLSTM Regression Performance:")
+    print(f"MAE:  {mae_r:.4f}")
+    print(f"RMSE: {rmse_r:.4f}")
+    print(f"R^2:  {r2_r:.4f}")
+
+    # Plot: Actual vs Predicted
+    plt.figure(figsize=(8, 6))
+    plt.scatter(actuals_r, preds_r, alpha=0.6)
+    plt.plot([actuals_r.min(), actuals_r.max()],
+            [actuals_r.min(), actuals_r.max()],
+            linestyle='--')
+    plt.xlabel("Actual Mood")
+    plt.ylabel("Predicted Mood")
+    plt.title("LSTM Regression: Actual vs Predicted Mood")
+    plt.tight_layout()
+    plt.savefig("lstm_regression_actual_vs_predicted.png", bbox_inches='tight')
+    plt.show()
 
 if __name__ == "__main__":
     main()
