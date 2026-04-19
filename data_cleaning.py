@@ -244,7 +244,7 @@ def create_sequences_regression(df, window_size=7):
     X = []
     y = []
 
-    feature_columns = [c for c in df.columns if c not in ('id', 'date', 'mood_target', "mood_class")]
+    feature_columns = [c for c in df.columns if c not in ('id', 'date', 'mood_target', "mood_class", "mood_class_target")]
 
     for uid, user_df in df.groupby('id'):
         user_df = user_df.sort_values("date")
@@ -562,9 +562,9 @@ def main():
     # Actual vs Predicted mood plot
     plt.figure(figsize=(6,6))
     plt.scatter(y_test, y_pred, alpha=0.5)
-    plt.xlabel("Actual Mood")
-    plt.ylabel("Predicted Mood")
-    plt.title("Random Forest: Actual vs Predicted Mood")
+    plt.xlabel("Actual Mood", fontsize=16)
+    plt.ylabel("Predicted Mood", fontsize=16)
+    plt.title("Random Forest", fontsize=20)
 
     # Perfect prediction line
     min_val = min(y_test.min(), y_pred.min())
@@ -672,14 +672,14 @@ def main():
     print(f"R^2:  {r2_r:.4f}")
 
     # Plot: Actual vs Predicted
-    plt.figure(figsize=(8, 6))
+    plt.figure(figsize=(6, 6))
     plt.scatter(actuals_r, preds_r, alpha=0.6)
     plt.plot([actuals_r.min(), actuals_r.max()],
             [actuals_r.min(), actuals_r.max()],
             linestyle='--')
-    plt.xlabel("Actual Mood")
-    plt.ylabel("Predicted Mood")
-    plt.title("LSTM Regression: Actual vs Predicted Mood")
+    plt.xlabel("Actual Mood", fontsize=16)
+    plt.ylabel("Predicted Mood", fontsize=16)
+    plt.title("LSTM", fontsize=20)
     plt.tight_layout()
     plt.savefig("lstm_regression_actual_vs_predicted.png", bbox_inches='tight')
     plt.show()
