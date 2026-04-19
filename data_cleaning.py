@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 from sklearn.impute import KNNImputer
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, confusion_matrix, precision_score, recall_score, ConfusionMatrixDisplay
+from sklearn.metrics import accuracy_score, confusion_matrix, classification_report, recall_score, ConfusionMatrixDisplay
 from sklearn.model_selection import train_test_split
 from sklearn.tree import plot_tree
 import matplotlib.pyplot as plt
@@ -10,6 +10,7 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler
 import torch
 from torch.utils.data import Dataset, DataLoader
 import torch.nn as nn 
+import seaborn as sns
 
 USAGE_VARS = ['call', 'sms', 'screen', 'appCat.builtin', 'appCat.communication', 'appCat.entertainment', 'appCat.finance', 'appCat.game', 'appCat.office', 'appCat.other', 'appCat.social', 'appCat.travel', 'appCat.unknown', 'appCat.utilities', 'appCat.weather']
 STATE_VARS = ["mood", "circumplex.arousal", "circumplex.valence", "activity"]
@@ -340,14 +341,17 @@ def main():
 
     # 1. Instance based: Random Forest 
     # 1. Train test split
+    class_order = ['low', 'medium', 'high', 'very_high']
+    class_to_idx = {c: i for i, c in enumerate(class_order)}
+
     X = df.drop(columns=['id', 'date', 'mood', 'mood_class'])
-    y = df['mood_class']
+    y = df['mood_class'].map(class_to_idx)
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
 
     # 2. Fit Random Forest Classifier
 
-    rf = RandomForestClassifier(random_state=42)
+    rf = RandomForestClassifier(random_state=42, class_weight='balanced')
     rf.fit(X_train, y_train)
 
     # Make a prediction 
@@ -362,6 +366,24 @@ def main():
     conf_matrix = confusion_matrix(y_test, y_pred)
     print("Confusion Matrix:")
     print(conf_matrix)
+
+    class_report = classification_report(y_test, y_pred, target_names=class_order, output_dict=True)
+
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+    ConfusionMatrixDisplay.from_predictions(y_test, y_pred, display_labels = class_order, ax = axes[0], colorbar=False)
+    axes[0].set_title("Confusion Matrix")
+
+    report_df = pd.DataFrame(class_report).T
+    report_df = report_df.drop(columns='support')  
+    sns.heatmap(report_df.iloc[:-2], annot=True, fmt=".2f", cmap="Blues", 
+                ax=axes[1], vmin=0, vmax=1)
+    axes[1].set_title("Classification Report")
+
+    plt.suptitle(f"Random Forest — Accuracy: {accuracy:.4f}", fontsize=13)
+    plt.tight_layout()
+    plt.savefig("rf_evaluation.png")
+    plt.show()
 
     # Feature importance 
     importances = rf.feature_importances_
@@ -383,7 +405,7 @@ def main():
     for decision in range(3):
         tree = rf.estimators_[decision]
         plt.figure(figsize=(20,10))
-        plot_tree(tree, filled = True, feature_names=X.columns, class_names=rf.classes_, rounded=True, 
+        plot_tree(tree, filled = True, feature_names=X.columns, class_names=class_order, rounded=True, 
               max_depth=3)
         plt.savefig(f"tree_{decision}.png")
         plt.close()
